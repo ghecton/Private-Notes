@@ -57,8 +57,6 @@ class PrivNotes:
       
       obj = json.loads(raw.decode('ascii'))
 
-      # if obj.get('v') != 1:
-      #   raise ValueError('Malformed data')
       self._salt = bytes.fromhex(obj['s'])
       if len(self._salt) != 16:
         raise ValueError('Malformed data')
@@ -71,7 +69,7 @@ class PrivNotes:
       
       checked = AESGCM(self._vk).decrypt(verifier[:12], verifier[12:], b'private-notes-verifier-v1')
 
-      if checked != b'private-notes-verifier-v1':
+      if checked != b'private-notes-password-checker':
         raise ValueError('Incorrect password')
       
       entries = obj['entries']
@@ -94,7 +92,7 @@ class PrivNotes:
 
         count = record[:8]
         nonce = self._mac(self._ek, b'nonce' + tag + count)[:12]
-        plaintext = AESGCM(self._ek).decrypt(nonce, record[8:], b'private-notes-record-v1' + tag + count)
+        plaintext = AESGCM(self._ek).decrypt(nonce, record[8:], b'private-notes-record' + tag + count)
         length = int.from_bytes(plaintext[:2], 'big')
 
         if (len(plaintext) != self.MAX_NOTE_LEN + 2 or length > self.MAX_NOTE_LEN or plaintext[2 + length:] != bytes(self.MAX_NOTE_LEN - length)):
@@ -117,7 +115,15 @@ class PrivNotes:
       checksum (str) : a hex-encoded checksum for the data used to protect
                        against rollback attacks (up to 32 characters in length)
     """
-    return pickle.dumps(self.kvs).hex(), ''
+    nonce = self._mac(self._vk, b'verifier-none')[:12]
+    password_checker = nonce + AESGCM(self._vk).encrypt(nonce, b'private-notes-password-checker')
+    obj = {
+      's': self._salt.hex(),
+      'vfy': password_checker.hex(),
+      'entries': [[k.hex(), self.kvs[k].hex()] for k in sorted(self.kvs)]
+    }
+    raw = json.dumps(obj, (',', ':'), True).encode('ascii')
+    return raw.hex(), hashlib.sha256(raw).hexdigest()
 
   def get(self, title):
     """Fetches the note associated with a title.
