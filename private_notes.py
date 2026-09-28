@@ -166,8 +166,14 @@ class PrivNotes:
     """
     if len(note) > self.MAX_NOTE_LEN:
       raise ValueError('Maximum note length exceeded')
-    
-    self.kvs[title] = note
+
+    tag = self._tag(title)
+    counter = 0 if tag not in self.kvs else int.from_bytes(self.kvs[tag][:8], 'big') + 1
+    count = counter.to_bytes(8, 'big')
+    plaintext = (len(note).to_bytes(2, 'big') + bytes(note, 'ascii') + bytes(self.MAX_NOTE_LEN - len(note)))
+    nonce = self._mac(self._ek, b'nonce' + tag + count)[:12]
+    self.kvs[tag] = count + AESGCM(self._ek).encrypt(nonce, plaintext, b'private-notes-v1' + tag + count)
+    return None
 
 
   def remove(self, title):
