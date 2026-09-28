@@ -1,4 +1,3 @@
-import pickle
 import os
 import json
 import hashlib
@@ -69,7 +68,7 @@ class PrivNotes:
       
       checked = AESGCM(self._vk).decrypt(verifier[:12], verifier[12:], b'private-notes-verifier-v1')
 
-      if checked != b'private-notes-password-checker':
+      if checked != b'private-notes-password-check':
         raise ValueError('Incorrect password')
       
       entries = obj['entries']
@@ -92,7 +91,7 @@ class PrivNotes:
 
         count = record[:8]
         nonce = self._mac(self._ek, b'nonce' + tag + count)[:12]
-        plaintext = AESGCM(self._ek).decrypt(nonce, record[8:], b'private-notes-record' + tag + count)
+        plaintext = AESGCM(self._ek).decrypt(nonce, record[8:], b'private-notes-v1' + tag + count)
         length = int.from_bytes(plaintext[:2], 'big')
 
         if (len(plaintext) != self.MAX_NOTE_LEN + 2 or length > self.MAX_NOTE_LEN or plaintext[2 + length:] != bytes(self.MAX_NOTE_LEN - length)):
@@ -115,14 +114,15 @@ class PrivNotes:
       checksum (str) : a hex-encoded checksum for the data used to protect
                        against rollback attacks (up to 32 characters in length)
     """
-    nonce = self._mac(self._vk, b'verifier-none')[:12]
-    password_checker = nonce + AESGCM(self._vk).encrypt(nonce, b'private-notes-password-checker')
+    nonce = self._mac(self._vk, b'verifier-nonce')[:12]
+    password_checker = nonce + AESGCM(self._vk).encrypt(nonce, b'private-notes-password-check', b'private-notes-verifier-v1')
     obj = {
       's': self._salt.hex(),
       'vfy': password_checker.hex(),
       'entries': [[k.hex(), self.kvs[k].hex()] for k in sorted(self.kvs)]
     }
     raw = json.dumps(obj, (',', ':'), True).encode('ascii')
+
     return raw.hex(), hashlib.sha256(raw).hexdigest()
 
   def get(self, title):
@@ -135,9 +135,19 @@ class PrivNotes:
       note (str) : the note associated with the requested title if
                        it exists and otherwise None
     """
-    if title in self.kvs:
-      return self.kvs[title]
-    return None
+    tag = self._tag(title)
+    if tag  not in self.kvs:
+      return None
+    record = self.kvs[tag]
+    nonce = self._mac(self._ek, b'nonce' + tag + record[:8])[:12]
+    try:
+      plaintext = AESGCM(self._ek).decrypt(nonce, record[8:], b'private-notes')
+      length = int.from_bytes(plaintext[:2], 'big')
+      if (len(plaintext) != self.MAX_NOTE_LEN + 2 or length > self.MAX_NOTE_LEN or plaintext[2 + length:] != bytes(self.MAX_NOTE_LEN - length)):
+        raise ValueError('Invalid note data')
+      return plaintext[2:2 + length].decode('ascii')
+    except (InvalidTag, UnicodeDecodeError):
+      raise ValueError('Invalid note data')
 
   def set(self, title, note):
     """Associates a note with a title and adds it to the database
