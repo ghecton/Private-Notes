@@ -186,8 +186,8 @@ class PrivNotes:
          success (bool) : True if the title was removed and False if the title was
                           not found
     """
-    if title in self.kvs:
-      del self.kvs[title]
+    tag = self._tag(title)
+    if tag in self.kvs:
+      del self.kvs[tag]
       return True
-
     return False
